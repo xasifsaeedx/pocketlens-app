@@ -1,0 +1,55 @@
+# macOS
+.DS_Store
+
+# Xcode / Swift Package Manager
+PocketLens/build/
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+**/xcuserdata/
+.swiftpm/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Secrets / environment (never commit real credentials)
+.env
+!.env.example
+
+# APNs auth keys — the .p8 private key is provided via env var (Render dashboard),
+# never committed. Defensive: block any *.p8 from ever entering the repo.
+*.p8
+
+# Supabase CLI local temp/state
+finance-backend/supabase/.temp/
+
+# Node / web app
+node_modules/
+web/dist/
+
+# Claude Code local config
+.claude/
+
+# App secrets (gitignored) — match any Config/Secrets.swift so a dir rename
+# (e.g. a stale pre-rename tree) can't slip a real secret past the ignore rule.
+**/Config/Secrets.swift
+
+/.agents
+
+# Local agent/session artifacts
+/scratchpad_shots/
+/skills-lock.json
+finance-backend/supabase/.branches/
+.env.localstack
+
+# fastlane / iOS release build artifacts
+/build/
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/test_output
+*.ipa
+*.dSYM.zip

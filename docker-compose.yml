@@ -1,0 +1,59 @@
+# PocketLens — self-hosted stack (web + API + scheduler).
+#
+# This runs the three app tiers against an EXTERNAL Supabase (hosted, or a separately-run
+# self-hosted Supabase stack). It does NOT run Postgres/Auth for you — see
+# README.md for standing up Supabase and applying the migrations.
+#
+# Configuration:
+#   1. Runtime env for the API + scheduler comes from finance-backend/sync-service/.env
+#      (copy finance-backend/sync-service/.env.example). Set SUPABASE_URL,
+#      SUPABASE_SERVICE_ROLE_KEY, CREDENTIALS_ENC_KEY, WEB_ORIGINS, and Plaid vars there.
+#   2. The web build bakes in the VITE_* values at build time. Provide them via a `.env`
+#      file next to this compose file (Compose reads it automatically) or export them in
+#      your shell before `docker compose build`:
+#        VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, VITE_BACKEND_URL, VITE_API_BASE_URL
+#
+# Then:  docker compose up --build
+
+services:
+  api:
+    build:
+      context: ./finance-backend/sync-service
+    image: pocketlens-api
+    env_file:
+      - ./finance-backend/sync-service/.env
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  scheduler:
+    # Same image as the API, but runs the sync → reconcile → digest chain on a loop
+    # (once every FULL_SYNC_COOLDOWN_DAYS-agnostic 24h here; tune the sleep as needed).
+    image: pocketlens-api
+    build:
+      context: ./finance-backend/sync-service
+    env_file:
+      - ./finance-backend/sync-service/.env
+    command: >
+      sh -c 'while true; do
+        python sync.py && python reconcile.py && python digests.py;
+        sleep 86400;
+      done'
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./web
+      args:
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL}
+        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY}
+        VITE_BACKEND_URL: ${VITE_BACKEND_URL}
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL}
+    image: pocketlens-web
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+    restart: unless-stopped

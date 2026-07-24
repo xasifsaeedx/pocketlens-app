@@ -1,0 +1,128 @@
+services:
+  - type: cron
+    name: pocketlens-sync
+    runtime: python
+    rootDir: finance-backend
+    # Twice-daily safety net — webhooks handle real-time transaction updates;
+    # this catches any missed webhooks and refreshes balances + net worth. Then
+    # reconcile.py diffs each item's full Plaid window against the DB and heals
+    # any drift the incremental sync can never revisit (see reconcile.py docstring).
+    # digests.py then emits the daily spend digest (and the weekly/monthly
+    # periodic digests when today lands on their cadence — see run_digests).
+    # digests.py no-ops on the afternoon run: it self-gates to the morning
+    # (~5am ET) run so a user gets one daily digest a day (see is_digest_run).
+    #
+    # Runs at 09:00 and 21:00 UTC (05:00 & 17:00 ET in summer, 04:00 & 16:00 ET
+    # in winter — Render cron is UTC and does not observe DST). The old single
+    # 06:00 UTC run fired at ~02:00 ET, before banks/Plaid had posted the prior
+    # day's transactions, so the freshest posted data was always ~2 days stale.
+    # A later morning run plus an evening run keeps the app current same-day.
+    # Safe to run twice: sync is cursor-incremental + idempotent, reconcile is a
+    # drift healer, and digests run on the morning pass only (with dedup_key as
+    # the backstop) so no digest fires twice.
+    schedule: "0 9,21 * * *"
+    buildCommand: pip install -r sync-service/requirements.txt
+    startCommand: cd sync-service && python sync.py && python reconcile.py && python digests.py
+    # Plaid credentials live per-user in the plaid_credentials table (encrypted),
+    # not in env vars — see finance-backend/sync-service/plaid_client.py.
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      # Fernet key for secrets at rest (Plaid secrets + access tokens) — see vault.py
+      - key: CREDENTIALS_ENC_KEY
+        sync: false
+      # APNs push sender (push.py) — alerts/digests run here, so push is
+      # sent from this cron. All set in the Render dashboard (NOT in git); the
+      # sender is dormant until APNS_KEY_ID/APNS_TEAM_ID/APNS_AUTH_KEY are present.
+      # APNS_AUTH_KEY is the PEM contents of the .p8 auth key (multiline).
+      - key: APNS_KEY_ID
+        sync: false
+      - key: APNS_TEAM_ID
+        sync: false
+      - key: APNS_TOPIC
+        sync: false
+      - key: APNS_AUTH_KEY
+        sync: false
+      - key: APNS_ENV
+        sync: false
+
+  - type: web
+    name: pocketlens-api
+    runtime: python
+    rootDir: finance-backend
+    plan: free
+    healthCheckPath: /health
+    buildCommand: pip install -r sync-service/requirements.txt
+    startCommand: cd sync-service && uvicorn api:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: PLAID_WEBHOOK_URL
+        sync: false
+      # This service's own /link URL (e.g. https://your-api.onrender.com/link).
+      # Enables OAuth banks (Chase, BofA, …): passed as redirect_uri on link tokens;
+      # each BYO user allowlists it in their Plaid dashboard (onboarding wizard step).
+      - key: PLAID_REDIRECT_URI
+        sync: false
+      # CORS allowlist for the browser web app (api.py). Comma-separated origins,
+      # scheme included. Set to pocketlens-web's URL once its first deploy mints it
+      # (Render can't inject a static site's public URL via fromService).
+      - key: WEB_ORIGINS
+        sync: false
+      # Must match the cron service's key — both encrypt/decrypt the same rows
+      - key: CREDENTIALS_ENC_KEY
+        sync: false
+
+  # Browser web app (web/) — static build served by Render's CDN. Vite bakes the
+  # VITE_* vars in at build time; the anon key is set in the dashboard (public by
+  # design, but kept out of git like the rest of web/.env).
+  - type: web
+    name: pocketlens-web
+    runtime: static
+    rootDir: web
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    # SPA — client-side router owns all paths
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    # Content-Security-Policy for the browser app. Kept here (deployment config,
+    # easily edited) rather than baked into index.html so self-hosters on other
+    # domains can adjust it without a rebuild. Only affects the deployed static
+    # site — Vite dev server and Playwright e2e are unaffected. Origins allowed:
+    #   script-src 'self'      — only our bundled JS, no external loader/tag
+    #   style-src  'unsafe-inline' + fonts.googleapis.com — Vite/Tailwind inject
+    #                            inline styles; index.css @imports the Google Fonts
+    #                            stylesheet (Inter / JetBrains Mono / Playfair)
+    #   font-src   fonts.gstatic.com — the actual font files that stylesheet pulls
+    #   img-src    data: https: — inlined icons + remote bank/institution logos
+    #   connect-src *.supabase.co (REST + auth), *.onrender.com (pocketlens-api)
+    #   frame-ancestors/object-src 'none', base-uri/form-action 'self' — hardening
+    #     (Plaid Link is NOT embedded here — it runs on the backend-hosted /link
+    #      page opened in a separate tab — so no frame-src for Plaid is needed)
+    headers:
+      - path: /*
+        name: Content-Security-Policy
+        value: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://*.supabase.co https://*.onrender.com; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"
+    # Vite bakes these VITE_* values in at build time, so they are prompted for on
+    # first deploy (sync:false) rather than hardcoded here. Fill them in the Render
+    # dashboard (or Blueprint prompt) with your own project/service URLs.
+    envVars:
+      # Your Supabase project URL, e.g. https://YOUR-PROJECT.supabase.co
+      - key: VITE_SUPABASE_URL
+        sync: false
+      # Your Supabase anon (publishable) key — public by design
+      - key: VITE_SUPABASE_ANON_KEY
+        sync: false
+      # Both point at the api service above. data/sync.ts + data/plaidCredentials.ts
+      # read VITE_BACKEND_URL; the legacy api/client.ts reads VITE_API_BASE_URL.
+      # Set both to your api URL, e.g. https://your-api.onrender.com
+      - key: VITE_BACKEND_URL
+        sync: false
+      - key: VITE_API_BASE_URL
+        sync: false

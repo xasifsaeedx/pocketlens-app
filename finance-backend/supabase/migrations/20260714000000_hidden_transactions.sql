@@ -1,0 +1,24 @@
+-- ============================================================
+-- HIDDEN TRANSACTIONS
+--   A user-facing bucket ("Hidden") for transactions that should not count in
+--   spend/income totals, budgets, or reports — without deleting them. Distinct
+--   from transfers (system-detected pairs) and from a plain category: hiding is
+--   orthogonal to categorization, so a hidden txn keeps its category and gets it
+--   back when unhidden.
+--
+--   hidden: user's intent flag. Hiding also flips exclude_from_totals = true so
+--   every existing totals/report query (which already filters on
+--   exclude_from_totals) needs no change. Unhiding clears exclude_from_totals
+--   unless the txn is still a transfer leg (transfer_group_id set).
+--
+--   Sync is safe: the sync service's insert/modified column lists never include
+--   hidden, so a Plaid re-sync can't clobber it (same as transfer_group_id).
+--
+--   Shared source of truth so iOS can adopt later with no schema change.
+-- ============================================================
+
+-- if not exists: production already has this column — it was applied as version
+-- 20260713000000 before saved_views claimed that version on main. After a
+-- `supabase migration repair --status reverted 20260713000000`, pushing re-runs
+-- saved_views (real 20260713) and this file re-applies as a no-op.
+alter table transactions add column if not exists hidden bool not null default false;

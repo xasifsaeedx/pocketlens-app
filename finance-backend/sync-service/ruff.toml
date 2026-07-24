@@ -1,0 +1,17 @@
+# Ruff config for the Python sync service.
+# Run:  ruff check .        (lint)
+#       ruff check --fix .  (autofix)
+#       ruff format .       (format)
+line-length = 100
+target-version = "py311"
+
+[lint]
+# F pyflakes (unused/undefined), I import-sorting, UP pyupgrade, B bugbear.
+# pycodestyle E/W left off on purpose: no line-length/whitespace churn on legacy code.
+select = ["F", "I", "UP", "B"]
+# B008: FastAPI's `Body()`/`Depends()` defaults are the framework idiom, not a bug.
+ignore = ["B008"]
+
+[lint.per-file-ignores]
+# Tests intentionally assert on broad Exception.
+"tests/*" = ["B017"]

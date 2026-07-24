@@ -1,0 +1,13 @@
+plaid-python>=14.0.0
+supabase>=2.0.0
+python-dotenv>=1.0.0
+fastapi>=0.110.0
+uvicorn>=0.27.0
+pyjwt>=2.8.0
+cryptography>=42.0.0
+
+# APNs push sender (push.py): PyJWT signs the ES256 provider token and
+# httpx sends over HTTP/2 (both already present via the API/supabase), but HTTP/2
+# needs `h2` explicitly — it's not a firm transitive dependency, and APNs refuses
+# HTTP/1.1.
+h2>=4.0.0
