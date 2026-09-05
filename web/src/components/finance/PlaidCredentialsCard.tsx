@@ -56,7 +56,7 @@ export function PlaidCredentialsCard({ highlight = false }: { highlight?: boolea
 
   const save = useMutation({
     mutationFn: () =>
-      savePlaidCredentials({ client_id: clientId.trim(), secret: secret.trim(), env: 'production' }),
+      savePlaidCredentials({ client_id: clientId.trim(), secret: secret.trim(), env: 'sandbox' }),
     onSuccess: () => {
       setClientId('')
       setSecret('')
