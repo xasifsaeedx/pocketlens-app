@@ -1,53 +1,4 @@
 services:
-  - type: cron
-    name: pocketlens-sync
-    runtime: python
-    rootDir: finance-backend
-    # Twice-daily safety net — webhooks handle real-time transaction updates;
-    # this catches any missed webhooks and refreshes balances + net worth. Then
-    # reconcile.py diffs each item's full Plaid window against the DB and heals
-    # any drift the incremental sync can never revisit (see reconcile.py docstring).
-    # digests.py then emits the daily spend digest (and the weekly/monthly
-    # periodic digests when today lands on their cadence — see run_digests).
-    # digests.py no-ops on the afternoon run: it self-gates to the morning
-    # (~5am ET) run so a user gets one daily digest a day (see is_digest_run).
-    #
-    # Runs at 09:00 and 21:00 UTC (05:00 & 17:00 ET in summer, 04:00 & 16:00 ET
-    # in winter — Render cron is UTC and does not observe DST). The old single
-    # 06:00 UTC run fired at ~02:00 ET, before banks/Plaid had posted the prior
-    # day's transactions, so the freshest posted data was always ~2 days stale.
-    # A later morning run plus an evening run keeps the app current same-day.
-    # Safe to run twice: sync is cursor-incremental + idempotent, reconcile is a
-    # drift healer, and digests run on the morning pass only (with dedup_key as
-    # the backstop) so no digest fires twice.
-    schedule: "0 9,21 * * *"
-    buildCommand: pip install -r sync-service/requirements.txt
-    startCommand: cd sync-service && python sync.py && python reconcile.py && python digests.py
-    # Plaid credentials live per-user in the plaid_credentials table (encrypted),
-    # not in env vars — see finance-backend/sync-service/plaid_client.py.
-    envVars:
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
-      # Fernet key for secrets at rest (Plaid secrets + access tokens) — see vault.py
-      - key: CREDENTIALS_ENC_KEY
-        sync: false
-      # APNs push sender (push.py) — alerts/digests run here, so push is
-      # sent from this cron. All set in the Render dashboard (NOT in git); the
-      # sender is dormant until APNS_KEY_ID/APNS_TEAM_ID/APNS_AUTH_KEY are present.
-      # APNS_AUTH_KEY is the PEM contents of the .p8 auth key (multiline).
-      - key: APNS_KEY_ID
-        sync: false
-      - key: APNS_TEAM_ID
-        sync: false
-      - key: APNS_TOPIC
-        sync: false
-      - key: APNS_AUTH_KEY
-        sync: false
-      - key: APNS_ENV
-        sync: false
-
   - type: web
     name: pocketlens-api
     runtime: python
@@ -73,10 +24,11 @@ services:
       # (Render can't inject a static site's public URL via fromService).
       - key: WEB_ORIGINS
         sync: false
-      # Must match the cron service's key — both encrypt/decrypt the same rows
+      # Fernet key for Plaid secrets + access tokens at rest (vault.py).
+      # If you re-add the pocketlens-sync cron later, it MUST use this same value.
       - key: CREDENTIALS_ENC_KEY
         sync: false
-
+ 
   # Browser web app (web/) — static build served by Render's CDN. Vite bakes the
   # VITE_* vars in at build time; the anon key is set in the dashboard (public by
   # design, but kept out of git like the rest of web/.env).
