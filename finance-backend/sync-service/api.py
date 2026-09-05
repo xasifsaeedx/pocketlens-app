@@ -255,7 +255,7 @@ def _probe(client_id: str, secret: str, env: str):
     client = get_plaid_for_creds({'plaid_client_id': client_id, 'secret': secret, 'env': env})
     try:
         client.institutions_get(InstitutionsGetRequest(
-            count=1, offset=0, country_codes=[CountryCode('US')],
+            count=1, offset=0, country_codes=[CountryCode('US'), CountryCode('CA')],
         ))
         return None
     except plaid.ApiException as e:
@@ -438,7 +438,7 @@ def link_prepare(authorization: str = Header(None), payload: dict = Body(default
         kwargs = dict(
             user=LinkTokenCreateRequestUser(client_user_id=user_id),
             client_name='My Finance App',
-            country_codes=[CountryCode('US')],
+            country_codes=[CountryCode('US'), CountryCode('CA')],
             language='en',
             access_token=access_token,
             # Consent to Investments without adding it to `products`: the subscription only
@@ -477,7 +477,7 @@ def link_prepare(authorization: str = Header(None), payload: dict = Body(default
         user=LinkTokenCreateRequestUser(client_user_id=user_id),
         client_name='My Finance App',
         products=[Products('transactions')],
-        country_codes=[CountryCode('US')],
+        country_codes=[CountryCode('US'), CountryCode('CA')],
         language='en',
         # Max history Plaid allows; default is only 90 days. Applies per-item at
         # link time, so already-linked items keep their original window.
