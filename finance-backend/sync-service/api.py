@@ -491,7 +491,7 @@ def link_prepare(authorization: str = Header(None), payload: dict = Body(default
         kwargs['webhook'] = WEBHOOK_URL
     if REDIRECT_URI:
         kwargs['redirect_uri'] = REDIRECT_URI
-        try:
+    try:
         link_token = client.link_token_create(LinkTokenCreateRequest(**kwargs)).to_dict()['link_token']
     except plaid.ApiException as e:
         # Plaid refused to mint the token. Uncaught, this escapes as a bare 500 -
