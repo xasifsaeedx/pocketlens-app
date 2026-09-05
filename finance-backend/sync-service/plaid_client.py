@@ -145,7 +145,7 @@ def fetch_institution_metadata(plaid_api_client: plaid_api.PlaidApi, institution
     try:
         resp = plaid_api_client.institutions_get_by_id(InstitutionsGetByIdRequest(
             institution_id=institution_id,
-            country_codes=[CountryCode('US')],
+            country_codes=[CountryCode('US'), CountryCode('CA')],
             options=InstitutionsGetByIdRequestOptions(include_optional_metadata=True),
         )).to_dict()
         inst = resp.get('institution') or {}
