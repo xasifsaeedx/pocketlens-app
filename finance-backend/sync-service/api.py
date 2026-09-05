@@ -491,7 +491,24 @@ def link_prepare(authorization: str = Header(None), payload: dict = Body(default
         kwargs['webhook'] = WEBHOOK_URL
     if REDIRECT_URI:
         kwargs['redirect_uri'] = REDIRECT_URI
-    link_token = client.link_token_create(LinkTokenCreateRequest(**kwargs)).to_dict()['link_token']
+        try:
+        link_token = client.link_token_create(LinkTokenCreateRequest(**kwargs)).to_dict()['link_token']
+    except plaid.ApiException as e:
+        # Plaid refused to mint the token. Uncaught, this escapes as a bare 500 -
+        # and FastAPI returns 500s WITHOUT the CORS headers, so the browser
+        # reports "Failed to fetch" and the /link page can only say "Something
+        # went wrong". Returning 200 with a status keeps it inside CORS and lets
+        # the page show what Plaid actually objected to. Same shape as the
+        # credential probe above.
+        try:
+            body = json.loads(e.body)
+            code = body.get('error_code') or 'UNKNOWN'
+            message = body.get('display_message') or body.get('error_message') or ''
+        except Exception:
+            code, message = 'UNKNOWN', (e.body or '')[:300]
+        logger.warning('link_token_create rejected by Plaid',
+                       extra={'plaid_error_code': code, 'plaid_error_message': message})
+        return {'status': 'plaid_error', 'code': code, 'detail': message}
     return {'status': 'ok', 'link_token': link_token}
 
 
@@ -587,6 +604,15 @@ function prepare(accessToken, itemId) {
         } else if (data.status === 'limit') {
             show('<h2>Item limit reached</h2><p>This Plaid account already has ' + data.used
                 + ' of ' + data.limit + ' linked banks. Unlink one, or upgrade the Plaid plan.</p>');
+        } else if (data.status === 'plaid_error') {
+            const esc = (t) => String(t == null ? '' : t)
+                .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            show('<h2>Plaid refused this request</h2>'
+                + '<p>Nothing is wrong with your bank - Plaid rejected the setup.</p>'
+                + '<p style="display:inline-block;text-align:left;max-width:560px;'
+                + 'background:#f6f6f6;border-radius:8px;padding:14px 16px;font-family:monospace;'
+                + 'font-size:13px;line-height:1.5">' + esc(data.code) + '<br>' + esc(data.detail)
+                + '</p>');
         } else if (data.status === 'expired') {
             show('<h2>Connection expired</h2><p>' + (data.detail || 'This connection can no longer be restored. Please link the bank again as a new connection.') + '</p>');
         } else {
