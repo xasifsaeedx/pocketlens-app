@@ -3,9 +3,15 @@
 //   net worth / balances -> plain signed numbers
 // The UI shows magnitude only; income is green, expense is red (Keep's money tokens).
 
+// 'narrowSymbol' renders a bare "$" for USD and CAD alike in every locale. Without it,
+// Intl disambiguates by locale — an en-CA browser shows USD as "US$", an en-US browser
+// shows CAD as "CA$" — which is not what a single-currency household wants to read.
+const CURRENCY_DISPLAY = 'narrowSymbol' as const
+
 const currencyFmt = new Intl.NumberFormat(undefined, {
   style: 'currency',
   currency: 'USD',
+  currencyDisplay: CURRENCY_DISPLAY,
 })
 
 /** "$1,234.56" — signed. Tolerant of arbitrary/unknown ISO codes — investment holdings
@@ -13,7 +19,11 @@ const currencyFmt = new Intl.NumberFormat(undefined, {
 export function formatCurrency(n: number, currency = 'USD'): string {
   if (currency === 'USD') return currencyFmt.format(n)
   try {
-    return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(n)
+    return new Intl.NumberFormat(undefined, {
+      style: 'currency',
+      currency,
+      currencyDisplay: CURRENCY_DISPLAY,
+    }).format(n)
   } catch {
     return `${n.toFixed(2)} ${currency}`
   }

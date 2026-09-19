@@ -46,6 +46,7 @@ const RING_CIRC = 2 * Math.PI * RING_RADIUS // ≈ 339.292 (viewBox 0 0 120 120)
 const wholeCurrencyFmt = new Intl.NumberFormat(undefined, {
   style: 'currency',
   currency: 'USD',
+  currencyDisplay: 'narrowSymbol', // bare "$" in every locale (see lib/money.ts)
   maximumFractionDigits: 0,
 })
 
