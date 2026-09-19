@@ -586,3 +586,95 @@ def test_recurring_contributions_no_double_count_on_overlapping_sync():
 
     again = [v for v in db.rows("separate_account_values") if v["separate_account_id"] == "s-1"]
     assert len(again) == 3, "overlapping sync must not double-count materialized periods"
+
+
+# ── A row for an account Plaid never returned must not abort the item ────────
+def test_unknown_account_row_is_skipped_not_fatal():
+    """Plaid can stream a transaction for an account /accounts/get does not list
+    (seen with a newly issued product). A bare KeyError used to abort the whole
+    item: every other account's rows on that page were lost and the cursor never
+    advanced, so the item re-failed on every run. The row is skipped and logged;
+    the rest of the page and the cursor land."""
+    plaid = FakePlaid(
+        accounts=[
+            {"account_id": "pa-check", "name": "Checking", "type": "depository",
+             "subtype": "checking", "balances": {"current": 500, "available": 480}},
+        ],
+        pages=[{
+            "added": [
+                {"transaction_id": "t-ghost", "account_id": "pa-ghost-card",
+                 "date": "2026-06-10", "authorized_date": None, "amount": 12.0,
+                 "merchant_name": "Ghost", "name": "GHOST", "pending": False},
+                {"transaction_id": "t-real", "account_id": "pa-check",
+                 "date": "2026-06-11", "authorized_date": None, "amount": 8.0,
+                 "merchant_name": "Cafe", "name": "CAFE", "pending": False},
+            ],
+            "modified": [], "removed": [], "next_cursor": "cur-1", "has_more": False,
+        }],
+    )
+    db = FakeSupabase(tables={
+        "plaid_items": [{"id": "item-1", "user_id": USER, "access_token": "tok",
+                         "institution_name": "Bank", "cursor": None, "last_synced_at": None,
+                         "is_syncing": False}],
+    })
+    stats = sync._new_stats()
+    sync.sync_item(plaid, db, plaid_items_row(db), {"memory": {}, "rules": [], "income_id": None},
+                   stats, USER, refresh_balances=True)
+
+    assert db.one("transactions", plaid_transaction_id="t-real") is not None
+    assert db.one("transactions", plaid_transaction_id="t-ghost") is None
+    assert db.one("plaid_items", id="item-1")["cursor"] == "cur-1", "cursor must still advance"
+    assert stats["transactions_added"] == 1
+    # The map miss triggered exactly one extra accounts_get, not a crash.
+    assert plaid.accounts_get_count == 2
+
+
+def plaid_items_row(db):
+    return db.rows("plaid_items")[0]
+
+
+# ── One rejected row must not drop the whole page ───────────────────────────
+def test_batch_upsert_failure_falls_back_to_per_row():
+    """PostgREST batch upserts are all-or-nothing. When the batch fails, retry
+    row by row so the rows the database accepts are written and only the bad
+    one is dropped (and logged); the caller's count reflects what landed."""
+    class RejectingDb:
+        """Wraps FakeSupabase: any transactions upsert whose payload contains
+        the poison row raises, mimicking a constraint violation."""
+        def __init__(self, inner):
+            self.inner = inner
+
+        def table(self, name):
+            q = self.inner.table(name)
+            if name != "transactions":
+                return q
+            orig_upsert = q.upsert
+
+            def upsert(payload, **kw):
+                rows = payload if isinstance(payload, list) else [payload]
+                if any(r.get("plaid_transaction_id") == "t-bad" for r in rows):
+                    class Boom:
+                        def execute(self_):  # noqa: N805
+                            raise RuntimeError("23502: null value in column")
+                    return Boom()
+                return orig_upsert(payload, **kw)
+            q.upsert = upsert
+            return q
+
+    db = FakeSupabase()
+    rows = [
+        {"plaid_transaction_id": "t-ok-1", "user_id": USER, "account_id": "a", "amount": 1.0},
+        {"plaid_transaction_id": "t-bad", "user_id": USER, "account_id": "a", "amount": 2.0},
+        {"plaid_transaction_id": "t-ok-2", "user_id": USER, "account_id": "a", "amount": 3.0},
+    ]
+    written = sync._upsert_new_transactions(RejectingDb(db), rows, "item-1", USER)
+
+    assert written == 2
+    assert db.one("transactions", plaid_transaction_id="t-ok-1") is not None
+    assert db.one("transactions", plaid_transaction_id="t-ok-2") is not None
+    assert db.one("transactions", plaid_transaction_id="t-bad") is None
+
+    # Happy path is still a single batch call.
+    clean = FakeSupabase()
+    assert sync._upsert_new_transactions(clean, rows[:1], "item-1", USER) == 1
+    assert sync._upsert_new_transactions(clean, [], "item-1", USER) == 0

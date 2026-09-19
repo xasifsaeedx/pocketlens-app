@@ -95,6 +95,48 @@ def _fill_user_owned_defaults(rows: list) -> list:
     return rows
 
 
+def _upsert_new_transactions(supabase, rows: list, item_id, user_id) -> int:
+    """Batch-upsert freshly added rows (ON CONFLICT DO NOTHING). Returns the
+    number of rows written.
+
+    The batch is all-or-nothing in PostgREST: one row the database rejects
+    (a constraint, an unexpected value shape from a new institution) fails the
+    whole page, and with it every transaction from every account on that page.
+    On a fresh item that reads as "the account is there, its transactions never
+    show up" (see _fill_user_owned_defaults for the first time this bit us).
+    So on a batch failure, retry row by row: keep the rows the database will
+    take, log the one(s) it won't with their Plaid ids, and let the cursor
+    advance instead of stalling the item on every run."""
+    if not rows:
+        return 0
+    try:
+        supabase.table('transactions').upsert(
+            rows,
+            on_conflict='plaid_transaction_id',
+            ignore_duplicates=True,
+        ).execute()
+        return len(rows)
+    except Exception:
+        logger.warning('batch transaction upsert failed; retrying row by row',
+                       extra={'item_id': item_id, 'user_id': user_id, 'rows': len(rows)},
+                       exc_info=True)
+    written = 0
+    for row in rows:
+        try:
+            supabase.table('transactions').upsert(
+                [row],
+                on_conflict='plaid_transaction_id',
+                ignore_duplicates=True,
+            ).execute()
+            written += 1
+        except Exception:
+            logger.exception('transaction row rejected by the database; skipping it',
+                             extra={'item_id': item_id, 'user_id': user_id,
+                                    'plaid_transaction_id': row.get('plaid_transaction_id'),
+                                    'account_id': row.get('account_id')})
+    return written
+
+
 def _is_product_not_ready(exc: Exception) -> bool:
     """True if a Plaid call failed with PRODUCT_NOT_READY — the item exists but
     Plaid hasn't finished preparing its transactions yet. Expected right after
@@ -404,7 +446,21 @@ def _sync_item_locked(plaid, supabase, item, ctx, stats, user_id, refresh_balanc
                 # A brand-new account appeared in transactions but not the map
                 # (skipped accounts_get, or created since). Refresh once.
                 acct_map, acct_types = _refresh_accounts_and_balances(plaid, supabase, access_token, item_id, user_id, stats)
-                acct_uuid = acct_map[txn['account_id']]
+                acct_uuid = acct_map.get(txn['account_id'])
+            if acct_uuid is None:
+                # Still unknown after a refresh: Plaid streamed a transaction for
+                # an account /accounts/get does not return (seen with newly
+                # issued products, e.g. a Wealthsimple credit card). A bare
+                # KeyError here used to abort the whole item — every other
+                # account's rows on this page were dropped and the cursor never
+                # advanced, so the item re-failed on every run. Skip the row and
+                # keep going; reconcile.py re-offers it once the account exists.
+                logger.warning('transaction references an account Plaid did not '
+                               'return from accounts_get; skipping row',
+                               extra={'item_id': item_id, 'user_id': user_id,
+                                      'plaid_account_id': txn['account_id'],
+                                      'plaid_transaction_id': txn['transaction_id']})
+                continue
             new_txns.append({
                 'user_id': user_id,
                 'plaid_transaction_id': txn['transaction_id'],
@@ -422,12 +478,8 @@ def _sync_item_locked(plaid, supabase, item, ctx, stats, user_id, refresh_balanc
             # the cursor) — merge semantics would reset category_id and clobber
             # user edits. Pending→posted never needs the merge: Plaid issues a
             # new transaction_id plus a removed event for the pending one.
-            supabase.table('transactions').upsert(
-                new_txns,
-                on_conflict='plaid_transaction_id',
-                ignore_duplicates=True,
-            ).execute()
-            stats['transactions_added'] += len(new_txns)
+            stats['transactions_added'] += _upsert_new_transactions(
+                supabase, new_txns, item_id, user_id)
 
         # Modified (don't overwrite user's category).
         # ponytail: per-row UPDATE — each row has distinct values; batch only if
