@@ -34,6 +34,7 @@ import type {
   Category,
   CategoryGroup,
   NotificationPref,
+  PlaidItem,
   SavedViewParams,
   Tag,
   Transaction,
@@ -615,6 +616,14 @@ export function useDeletePlaidItem() {
 // the Sync buttons on Balances and Settings.
 const SYNC_REFRESH_DELAYS_MS = [3_000, 8_000]
 
+/** Everything a Plaid sync can change. */
+function invalidateAfterSync(qc: ReturnType<typeof useQueryClient>) {
+  qc.invalidateQueries({ queryKey: sbKeys.accounts })
+  qc.invalidateQueries({ queryKey: ['sb', 'netWorth'] })
+  qc.invalidateQueries({ queryKey: ['sb', 'transactions'] })
+  qc.invalidateQueries({ queryKey: sbKeys.plaidItems })
+}
+
 export function useTriggerSync() {
   const qc = useQueryClient()
   const timers = useRef<ReturnType<typeof setTimeout>[]>([])
@@ -625,16 +634,60 @@ export function useTriggerSync() {
     mutationFn: triggerSync,
     onSuccess: () => {
       toast.success('Syncing… balances will update shortly.')
-      const refresh = () => {
-        qc.invalidateQueries({ queryKey: sbKeys.accounts })
-        qc.invalidateQueries({ queryKey: ['sb', 'netWorth'] })
-        qc.invalidateQueries({ queryKey: ['sb', 'transactions'] })
-        qc.invalidateQueries({ queryKey: sbKeys.plaidItems })
-      }
+      const refresh = () => invalidateAfterSync(qc)
       timers.current = SYNC_REFRESH_DELAYS_MS.map((ms) => setTimeout(refresh, ms))
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : 'Sync failed'),
   })
+}
+
+// ── Auto-sync on sign-in ──────────────────────────────────────────────────────
+// The scheduled sync runs server-side (Supabase pg_cron → the API). If it stalls
+// for any reason, opening the app is the fallback: once per sign-in, if any linked
+// bank hasn't synced within AUTO_SYNC_STALE_MS, kick the same incremental sync the
+// Sync button runs. Silent on failure — the scheduled path and the button remain.
+
+export const AUTO_SYNC_STALE_MS = 60 * 60 * 1000
+
+/** True when some linked bank is idle and hasn't synced in the last hour (or ever). */
+export function isSyncStale(items: PlaidItem[], now: number = Date.now()): boolean {
+  return items.some(
+    (i) =>
+      !i.is_syncing &&
+      (i.last_synced_at == null || now - Date.parse(i.last_synced_at) > AUTO_SYNC_STALE_MS),
+  )
+}
+
+export function useAutoSyncOnLogin(userId: string | null) {
+  const qc = useQueryClient()
+  const { data: items } = usePlaidItems()
+  const decidedFor = useRef<string | null>(null)
+  const wasSyncing = useRef(false)
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([])
+  useEffect(() => () => timers.current.forEach(clearTimeout), [])
+
+  useEffect(() => {
+    if (!userId || !items) return
+    // Decide once per signed-in user, the first time the bank list is known.
+    if (decidedFor.current !== userId) {
+      decidedFor.current = userId
+      if (isSyncStale(items)) {
+        triggerSync()
+          .then(() => {
+            timers.current = SYNC_REFRESH_DELAYS_MS.map((ms) =>
+              setTimeout(() => invalidateAfterSync(qc), ms),
+            )
+          })
+          .catch((e: unknown) => console.warn('auto-sync on sign-in failed', e))
+      }
+    }
+    // usePlaidItems polls while any bank is mid-sync; when the last one settles,
+    // pull the fresh rows in. Covers slow syncs the fixed delays above miss, and
+    // syncs started by the scheduler or a webhook while the app was open.
+    const syncing = items.some((i) => i.is_syncing)
+    if (wasSyncing.current && !syncing) invalidateAfterSync(qc)
+    wasSyncing.current = syncing
+  }, [userId, items, qc])
 }
 
 /** Full sync: reset every bank's cursor and re-pull the full 730-day window.

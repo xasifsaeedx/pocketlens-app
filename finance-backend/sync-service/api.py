@@ -75,6 +75,13 @@ FULL_SYNC_COOLDOWN_DAYS = float(os.environ.get('FULL_SYNC_COOLDOWN_DAYS', '2'))
 # as before.
 REDIRECT_URI = os.environ.get('PLAID_REDIRECT_URI')  # e.g. https://your-api.onrender.com/link
 
+# Shared secret for the server-side scheduler (Supabase pg_cron → POST
+# /internal/*). The scheduled jobs used to be a Render cron / a PC-side task
+# runner; now the database itself calls these endpoints on a schedule (see
+# supabase/migrations/20260919000000_server_side_scheduler.sql). Unset = the
+# endpoints answer 503 so a missing config is loud, not a silent no-op.
+TRIGGER_SECRET = os.environ.get('TRIGGER_SECRET')
+
 
 def _user_id_from_token(token: str) -> str:
     """Verify a Supabase access token (JWT) and return its user id, else 401.
@@ -119,6 +126,54 @@ def trigger_sync(background: BackgroundTasks,
 @app.get('/health')
 def health():
     return {'status': 'ok'}
+
+
+# ── Server-side scheduler entry points ───────────────────────────────────────
+# Called by Supabase pg_cron via pg_net (no PC, no Render cron). Each returns
+# 202 immediately and runs the job as a background task, exactly like the
+# webhook path, so the caller's HTTP timeout never truncates a long sync.
+
+def _require_trigger_secret(provided: str | None) -> None:
+    if not TRIGGER_SECRET:
+        raise HTTPException(status_code=503, detail='TRIGGER_SECRET not configured on the API')
+    if not provided or not hmac.compare_digest(provided, TRIGGER_SECRET):
+        raise HTTPException(status_code=401, detail='invalid trigger secret')
+
+
+def run_daily_maintenance() -> None:
+    """What the old daily cron did: reconcile drift for every item, then emit
+    the spend digests if this is the morning (ET) run. Each half is isolated so
+    a reconcile failure never suppresses digests, and vice versa."""
+    from digests import DIGEST_TZ, is_digest_run, run_digests
+    from reconcile import run_reconcile
+    try:
+        run_reconcile()
+    except Exception:
+        logger.exception('daily maintenance: reconcile failed')
+    now = datetime.datetime.now(datetime.UTC)
+    if not is_digest_run(now):
+        logger.info('daily maintenance: not the morning run, skipping digests')
+        return
+    try:
+        run_digests(get_supabase(), today=now.astimezone(DIGEST_TZ).date())
+    except Exception:
+        logger.exception('daily maintenance: digests failed')
+
+
+@app.post('/internal/sync', status_code=202)
+def internal_sync(background: BackgroundTasks, x_trigger_secret: str = Header(None)):
+    """Hourly: incremental sync of every active item for every user."""
+    _require_trigger_secret(x_trigger_secret)
+    background.add_task(run_sync)
+    return {'status': 'queued', 'job': 'sync'}
+
+
+@app.post('/internal/daily', status_code=202)
+def internal_daily(background: BackgroundTasks, x_trigger_secret: str = Header(None)):
+    """Daily: reconcile every item against Plaid, then the morning digests."""
+    _require_trigger_secret(x_trigger_secret)
+    background.add_task(run_daily_maintenance)
+    return {'status': 'queued', 'job': 'daily'}
 
 
 # ── Account deletion ─────────────────────────────────────────────────────────

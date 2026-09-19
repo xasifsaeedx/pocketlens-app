@@ -25,8 +25,13 @@ services:
       - key: WEB_ORIGINS
         sync: false
       # Fernet key for Plaid secrets + access tokens at rest (vault.py).
-      # If you re-add the pocketlens-sync cron later, it MUST use this same value.
       - key: CREDENTIALS_ENC_KEY
+        sync: false
+      # Shared secret for the scheduled jobs. Supabase pg_cron calls
+      # POST /internal/sync (hourly) and /internal/daily with this value in the
+      # X-Trigger-Secret header; store the same value in Supabase Vault as
+      # `pocketlens_trigger_secret` (see the server_side_scheduler migration).
+      - key: TRIGGER_SECRET
         sync: false
  
   # Browser web app (web/) — static build served by Render's CDN. Vite bakes the
