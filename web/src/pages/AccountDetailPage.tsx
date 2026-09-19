@@ -129,9 +129,7 @@ export default function AccountDetailPage() {
         {/* Header card */}
         <div className="card-surface rounded-xl p-5 mb-8 space-y-4">
           {/* Eyebrow */}
-          <p className="eyebrow">
-            {typeLabel(account.type)} · {account.currency}
-          </p>
+          <p className="eyebrow">{typeLabel(account.type)}</p>
 
           {/* Balance */}
           {balance != null ? (

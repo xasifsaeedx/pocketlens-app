@@ -276,3 +276,44 @@ def test_link_page_oauth_return_resumes_from_session_storage():
     assert "oauth_state_id" in html
     assert "receivedRedirectUri" in html
     assert "sessionStorage.getItem('plaid_link_token')" in html
+
+
+def test_link_prepare_update_mode_enables_account_selection(monkeypatch):
+    """Update Mode must let the user add accounts the institution issued after
+    the original link (e.g. a new credit card). Plaid never adds accounts to an
+    existing Item by itself, so without `account_selection_enabled` a reconnect
+    only repairs credentials and the new account's transactions never arrive."""
+    db = FakeSupabase(tables={
+        "plaid_credentials": [{
+            "user_id": USER, "plaid_client_id": CLIENT_ID,
+            "plaid_secret_enc": vault.encrypt(PROD_SECRET), "plaid_env": "production",
+            "item_limit": 10, "is_active": True,
+        }],
+        "plaid_items": [{
+            "id": "item-1", "user_id": USER, "plaid_client_id": CLIENT_ID,
+            "access_token": vault.encrypt("access-token"), "is_active": True,
+        }],
+    })
+    monkeypatch.setattr(api, "get_supabase", lambda: db)
+    monkeypatch.setattr(api, "_user_id_from_token", lambda t: USER)
+
+    seen = {}
+
+    class FakePlaid:
+        def link_token_create(self, req):
+            seen["req"] = req.to_dict()
+
+            class R:
+                def to_dict(self_):  # noqa: N805
+                    return {"link_token": "link-update-xyz"}
+            return R()
+    monkeypatch.setattr(api, "get_plaid_for_creds", lambda creds: FakePlaid())
+
+    out = api.link_prepare(authorization="Bearer tok", payload={"item_id": "item-1"})
+    assert out == {"status": "ok", "link_token": "link-update-xyz",
+                   "mode": "update", "item_id": "item-1"}
+    req = seen["req"]
+    assert req["access_token"] == "access-token"
+    assert req["update"] == {"account_selection_enabled": True}
+    assert req["transactions"] == {"days_requested": 730}
+    assert "products" not in req, "update mode must not re-request products"

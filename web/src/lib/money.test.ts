@@ -7,6 +7,16 @@ describe('money helpers', () => {
     expect(formatCurrency(-42)).toBe('-$42.00')
   })
 
+  it('formatCurrency shows a bare "$" for CAD and USD, never a locale prefix', () => {
+    expect(formatCurrency(12.34, 'CAD')).toBe('$12.34')
+    expect(formatCurrency(12.34, 'USD')).toBe('$12.34')
+    expect(formatCurrency(-5, 'CAD')).toBe('-$5.00')
+  })
+
+  it('formatCurrency falls back to "n CODE" for an unknown code', () => {
+    expect(formatCurrency(12.34, 'NOTREAL')).toBe('12.34 NOTREAL')
+  })
+
   it('formatAmount shows magnitude only', () => {
     expect(formatAmount(65)).toBe('$65.00')
     expect(formatAmount(-65)).toBe('$65.00')

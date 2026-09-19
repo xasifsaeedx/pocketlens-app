@@ -23,6 +23,7 @@ from plaid.model.institutions_get_request import InstitutionsGetRequest
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
 from plaid.model.item_remove_request import ItemRemoveRequest
 from plaid.model.link_token_create_request import LinkTokenCreateRequest
+from plaid.model.link_token_create_request_update import LinkTokenCreateRequestUpdate
 from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
 from plaid.model.link_token_transactions import LinkTokenTransactions
 from plaid.model.products import Products
@@ -441,6 +442,16 @@ def link_prepare(authorization: str = Header(None), payload: dict = Body(default
             country_codes=[CountryCode('US'), CountryCode('CA')],
             language='en',
             access_token=access_token,
+            # Let the user tick accounts the institution added *after* the
+            # original link (a new credit card, a new savings account). Plaid
+            # never adds accounts to an existing Item on its own — without this
+            # flag Update Mode only repairs credentials, and the new account's
+            # transactions are never fetched. /link/claim then resets the
+            # cursor so the next sync pulls the new account's history.
+            update=LinkTokenCreateRequestUpdate(account_selection_enabled=True),
+            # Same history window as a fresh link; applies to accounts added
+            # through this Update Mode session.
+            transactions=LinkTokenTransactions(days_requested=730),
             # Consent to Investments without adding it to `products`: the subscription only
             # bills when we actually call /investments/transactions/get, i.e. for
             # items that have a brokerage account — not every linked bank.
