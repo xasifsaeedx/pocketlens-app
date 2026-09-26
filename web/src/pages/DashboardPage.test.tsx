@@ -3,7 +3,7 @@
 // Redesigned Jul 2026 — no assets/liabilities subline, no recurring-charges link.
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import DashboardPage from './DashboardPage'
@@ -99,5 +99,22 @@ describe('DashboardPage — spending-led home (Jul 2026 redesign)', () => {
     // The old empty-state messages should not appear
     expect(screen.queryByText('No spending this month')).not.toBeInTheDocument()
     expect(screen.queryByText('Not enough data yet')).not.toBeInTheDocument()
+  })
+
+  it('eye toggle masks hero spend, net worth and net cashflow, and remembers it', () => {
+    localStorage.clear()
+    const { unmount } = renderPage()
+    fireEvent.click(screen.getByRole('button', { name: 'Hide amounts' }))
+    expect(screen.queryByText('$45,000.00')).not.toBeInTheDocument()
+    expect(screen.queryByText('$2,800.00')).not.toBeInTheDocument()
+    expect(screen.getAllByText('$••••••')).toHaveLength(3)
+    // Persisted: a fresh mount stays hidden until toggled back.
+    unmount()
+    renderPage()
+    expect(screen.getAllByText('$••••••')).toHaveLength(3)
+    fireEvent.click(screen.getByRole('button', { name: 'Show amounts' }))
+    expect(screen.getByText('$45,000.00')).toBeInTheDocument()
+    expect(screen.queryByText('$••••••')).not.toBeInTheDocument()
+    localStorage.clear()
   })
 })
