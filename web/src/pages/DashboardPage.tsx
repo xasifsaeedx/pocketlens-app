@@ -1,10 +1,11 @@
 // Dashboard — monthly spending hero + cumulative spend line chart, month navigator,
-// net worth + net cashflow small cards, recent activity.
+// net worth + net cashflow small cards, recent activity. An eye toggle next to the
+// greeting masks the three headline amounts (remembered per browser).
 // Mirrors iOS HomeView after the Jul 2026 redesign.
 
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowLeftRight, ChevronLeft, ChevronRight, TrendingUp } from 'lucide-react'
+import { ArrowLeftRight, ChevronLeft, ChevronRight, Eye, EyeOff, TrendingUp } from 'lucide-react'
 import { TransactionList } from '@/features/transactions/TransactionList'
 import { ErrorState } from '@/components/ErrorState'
 import { CategoryPickerDialog } from '@/components/finance/CategoryPickerDialog'
@@ -44,6 +45,29 @@ function addMonths(d: Date, delta: number): Date {
 
 const MONTH_FMT = new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric' })
 
+// Privacy toggle for the headline amounts. Stored in localStorage so the choice
+// survives reloads; storage can be unavailable (private mode), so reads/writes
+// are guarded and the page falls back to showing amounts.
+const HIDE_AMOUNTS_KEY = 'pocketlens.hideAmounts'
+const MASKED = '$••••••'
+const maskCurrency = () => MASKED
+
+function readHideAmounts(): boolean {
+  try {
+    return localStorage.getItem(HIDE_AMOUNTS_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function writeHideAmounts(hidden: boolean) {
+  try {
+    localStorage.setItem(HIDE_AMOUNTS_KEY, hidden ? '1' : '0')
+  } catch {
+    /* storage unavailable — toggle still works for this session */
+  }
+}
+
 // ─── page ────────────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
@@ -75,6 +99,14 @@ export default function DashboardPage() {
   )
 
   const [selected, setSelected] = useState<Transaction | null>(null)
+  const [hideAmounts, setHideAmounts] = useState<boolean>(readHideAmounts)
+  function toggleHideAmounts() {
+    setHideAmounts((prev) => {
+      writeHideAmounts(!prev)
+      return !prev
+    })
+  }
+  const amountFormat = hideAmounts ? maskCurrency : formatCurrency
   const setCategory = useSetCategory()
 
   const netSpend = netSpendMTD(monthTxns)
@@ -134,8 +166,24 @@ export default function DashboardPage() {
         {/* ── Left column ─────────────────────────────────────────────── */}
         <div className="space-y-6">
 
-          {/* Personalized greeting */}
-          <p className="text-lg font-medium text-foreground tracking-tight">{greeting}</p>
+          {/* Personalized greeting + hide-amounts toggle */}
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-lg font-medium text-foreground tracking-tight">{greeting}</p>
+            <button
+              type="button"
+              onClick={toggleHideAmounts}
+              aria-pressed={hideAmounts}
+              aria-label={hideAmounts ? 'Show amounts' : 'Hide amounts'}
+              title={hideAmounts ? 'Show amounts' : 'Hide amounts'}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-container text-primary transition-colors hover:bg-surface-container-high focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            >
+              {hideAmounts ? (
+                <EyeOff className="h-4 w-4" aria-hidden />
+              ) : (
+                <Eye className="h-4 w-4" aria-hidden />
+              )}
+            </button>
+          </div>
 
           {/* Monthly spending hero card */}
           <section className="card-surface p-6 space-y-4">
@@ -176,6 +224,8 @@ export default function DashboardPage() {
               <p className="text-xs text-muted-foreground mb-1">Monthly Spending</p>
               {monthLoading ? (
                 <Skeleton className="h-12 w-48" />
+              ) : hideAmounts ? (
+                <p className="text-hero-number text-foreground">{MASKED}</p>
               ) : (
                 <CountUp
                   value={netSpend}
@@ -198,7 +248,7 @@ export default function DashboardPage() {
                 color="hsl(var(--brand))"
                 height={200}
                 tooltipLabel="Cumulative spend"
-                valueFormatter={formatCurrency}
+                valueFormatter={amountFormat}
                 labelFormatter={(label) => `Day ${label}`}
                 ariaLabel="Cumulative monthly spending"
                 yDomain={spendDomain}
@@ -215,6 +265,7 @@ export default function DashboardPage() {
                 amount={netWorth}
                 isLoading={currentNwQuery.isLoading}
                 icon="nw"
+                hidden={hideAmounts}
               />
             </Link>
             <StatCard
@@ -222,6 +273,7 @@ export default function DashboardPage() {
               amount={netCashflow}
               isLoading={monthLoading}
               icon="net"
+              hidden={hideAmounts}
             />
           </section>
 
@@ -301,16 +353,18 @@ function StatCard({
   amount,
   isLoading,
   icon,
+  hidden = false,
 }: {
   label: string
   amount: number | null
   isLoading: boolean
   icon: 'nw' | 'net'
+  hidden?: boolean
 }) {
   const Icon = icon === 'nw' ? TrendingUp : ArrowLeftRight
 
   const amountColor =
-    amount == null
+    amount == null || hidden
       ? 'text-foreground'
       : icon === 'nw'
         ? amount < 0
@@ -332,7 +386,7 @@ function StatCard({
         <Skeleton className="h-7 w-24" />
       ) : (
         <p className={cn('text-xl font-bold tabular-nums', amountColor)}>
-          {formatCurrency(amount)}
+          {hidden ? MASKED : formatCurrency(amount)}
         </p>
       )}
     </div>
